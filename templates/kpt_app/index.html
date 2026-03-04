@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Генератор запросов ЕГРН</title>
+    {% load django_bootstrap5 %}
+    {% bootstrap_css %}
+    {% bootstrap_javascript %}
+    <style>
+        body {
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+            background-color: #f8f9fa;
+        }
+        .container {
+            max-width: 1000px;
+            background-color: white;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .header h1 {
+            color: #0d6efd;
+            font-weight: 600;
+        }
+        .form-actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            margin-top: 2rem;
+        }
+        .btn {
+            min-width: 200px;
+            padding: 0.75rem;
+        }
+        .note {
+            margin-top: 2rem;
+            padding: 1rem;
+            background-color: #e7f1ff;
+            border-left: 4px solid #0d6efd;
+            border-radius: 5px;
+        }
+        .row-item {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            position: relative;
+        }
+        .row-item .remove-row {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            cursor: pointer;
+            color: #dc3545;
+            font-weight: bold;
+            font-size: 1.2rem;
+            width: 24px;
+            height: 24px;
+            text-align: center;
+            line-height: 24px;
+            border-radius: 50%;
+        }
+        .row-item .remove-row:hover {
+            background-color: #dc3545;
+            color: white;
+        }
+        .add-row {
+            margin-top: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .legend {
+            display: flex;
+            gap: 2rem;
+            justify-content: center;
+            margin-bottom: 1.5rem;
+            padding: 1rem;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            flex-wrap: wrap;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+        }
+        .legend-color.red {
+            background-color: #ffcccc;
+            border: 1px solid #ff0000;
+        }
+        .legend-color.green {
+            background-color: #ccffcc;
+            border: 1px solid #00ff00;
+        }
+        .legend-color.yellow {
+            background-color: #ffffcc;
+            border: 1px solid #ffd700;
+        }
+        /* Все поля ввода теперь зеленые */
+        .cadastral-input {
+            background-color: #f0fff0;
+            border-color: #99ff99;
+        }
+        .contract-input {
+            background-color: #f0fff0;
+            border-color: #99ff99;
+        }
+        /* Убираем красный цвет */
+        .field-red textarea {
+            background-color: #f0fff0;
+            border-color: #99ff99;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Генератор запросов ЕГРН</h1>
+            <p class="text-muted">Формирование документов на основе шаблонов</p>
+        </div>
+        
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color green"></div>
+                <span>Все поля ввода (кадастровый номер, договор, дата)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color yellow"></div>
+                <span>Дата формирования (автоматически)</span>
+            </div>
+        </div>
+        
+        <form method="post" action="{% url 'generate' %}" id="mainForm">
+            {% csrf_token %}
+            
+            <div class="mb-3">
+                <label class="form-label fw-bold">Строки заказа (кадастровый номер + договор)</label>
+                <div id="rows-container">
+                    <!-- Строки будут добавляться сюда через JavaScript -->
+                </div>
+                <button type="button" class="btn btn-outline-success btn-sm add-row" onclick="addRow()">
+                    + Добавить строку
+                </button>
+            </div>
+            
+            {{ form.rows_json }}
+            
+            {% if form.rows_json.errors %}
+                <div class="alert alert-danger mt-2">
+                    {{ form.rows_json.errors }}
+                </div>
+            {% endif %}
+            
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">
+                    Сформировать документы
+                </button>
+            </div>
+        </form>
+        
+        {% if error %}
+        <div class="alert alert-danger alert-dismissible fade show mt-3" role="alert">
+            <strong>Ошибка!</strong> {{ error }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {% endif %}
+        
+        <div class="note">
+            <p class="fw-bold">ℹ️ Информация</p>
+            <p>Программа использует шаблоны документов из папки <code>templates_docs/</code>:</p>
+            <ul class="mb-0">
+                <li><strong>sluzhebka_template.docx</strong> — шаблон служебной записки (должен содержать маркер <code>##TABLE_PLACE##</code>)</li>
+                <li><strong>kpt_template.docx</strong> — шаблон запроса на кадастровый квартал</li>
+                <li><strong>zu_template.docx</strong> — шаблон запроса на земельный участок</li>
+            </ul>
+            <p class="mt-2 text-muted small">
+                В шаблонах используйте маркеры: <code>##KADASTR_NUMBER##</code>, <code>##CONTRACT_NUMBER##</code>, 
+                <code>##CONTRACT_DATE##</code>, <code>##CURRENT_DATE##</code>, <code>##TABLE_PLACE##</code>
+            </p>
+            <p class="mt-2 text-muted small">
+                <strong>Формат кадастрового номера:</strong> XX:XX:XXXXXXX или XX:XX:XXXXXXX:XXXXX
+            </p>
+        </div>
+    </div>
+    
+    <script>
+        let rowCount = 0;
+        
+        function addRow(cadastralNumber = '', contractNumber = '', contractDate = '') {
+            rowCount++;
+            const container = document.getElementById('rows-container');
+            const rowHtml = `
+                <div class="row-item" id="row-${rowCount}">
+                    <div class="row">
+                        <div class="col-md-4">
+                            <label class="form-label">Кадастровый номер</label>
+                            <input type="text" class="form-control cadastral-input" 
+                                   name="cadastral_${rowCount}" 
+                                   value="${cadastralNumber}" 
+                                   placeholder="95:06:1501006 или 95:09:0100041:223"
+                                   style="background-color: #f0fff0; border-color: #99ff99;">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Номер договора</label>
+                            <input type="text" class="form-control contract-input" 
+                                   name="contract_number_${rowCount}" 
+                                   value="${contractNumber}" 
+                                   placeholder="01/КЗР-4068"
+                                   style="background-color: #f0fff0; border-color: #99ff99;">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Дата договора</label>
+                            <input type="date" class="form-control contract-input" 
+                                   name="contract_date_${rowCount}" 
+                                   value="${contractDate}"
+                                   style="background-color: #f0fff0; border-color: #99ff99;">
+                        </div>
+                    </div>
+                    <span class="remove-row" onclick="removeRow(${rowCount})">×</span>
+                </div>
+            `;
+            container.insertAdjacentHTML('beforeend', rowHtml);
+        }
+        
+        function removeRow(id) {
+            const element = document.getElementById(`row-${id}`);
+            if (element) {
+                element.remove();
+            }
+        }
+        
+        // Добавляем первую строку при загрузке страницы
+        window.onload = function() {
+            addRow('95:06:1501006', '01/КЗР-4068', '2025-12-25');
+        };
+        
+        // Перед отправкой формы собираем данные о строках в JSON
+        document.getElementById('mainForm').onsubmit = function(e) {
+            const rows = [];
+            const rowItems = document.querySelectorAll('.row-item');
+            
+            rowItems.forEach(item => {
+                // Находим поля ввода внутри строки
+                const inputs = item.querySelectorAll('input[type="text"], input[type="date"]');
+                let cadastralNumber = '';
+                let contractNumber = '';
+                let contractDate = '';
+                
+                inputs.forEach(input => {
+                    if (input.placeholder && input.placeholder.includes('Кадастровый')) {
+                        cadastralNumber = input.value.trim();
+                    } else if (input.type === 'date') {
+                        contractDate = input.value;
+                    } else if (input.placeholder && input.placeholder.includes('номер договора')) {
+                        contractNumber = input.value.trim();
+                    } else if (input.name && input.name.includes('contract_number')) {
+                        contractNumber = input.value.trim();
+                    }
+                });
+                
+                // Альтернативный способ поиска по классам
+                const cadastralInput = item.querySelector('.cadastral-input');
+                const contractNumberInput = item.querySelector('.contract-input:not([type="date"])');
+                const contractDateInput = item.querySelector('.contract-input[type="date"]');
+                
+                if (cadastralInput) cadastralNumber = cadastralInput.value.trim();
+                if (contractNumberInput) contractNumber = contractNumberInput.value.trim();
+                if (contractDateInput) contractDate = contractDateInput.value;
+                
+                if (cadastralNumber && contractNumber && contractDate) {
+                    rows.push({
+                        cadastral_number: cadastralNumber,
+                        contract_number: contractNumber,
+                        contract_date: contractDate
+                    });
+                }
+            });
+            
+            if (rows.length === 0) {
+                alert('Добавьте хотя бы одну заполненную строку');
+                e.preventDefault();
+                return false;
+            }
+            
+            document.getElementById('id_rows_json').value = JSON.stringify(rows);
+            return true;
+        };
+    </script>
+</body>
+</html>

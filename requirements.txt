@@ -1,0 +1,3 @@
+﻿Django==4.2.0
+python-docx==0.8.11
+django-bootstrap5==23.3
