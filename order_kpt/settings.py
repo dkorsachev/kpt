@@ -1,4 +1,7 @@
-# order_kpt/settings.py
+"""
+Django settings for order_kpt project.
+"""
+
 import os
 from pathlib import Path
 
@@ -6,7 +9,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-your-secret-key-here'
+SECRET_KEY = 'django-insecure-your-secret-key-here-change-in-production'
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -41,7 +44,7 @@ TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
         'DIRS': [BASE_DIR / 'templates'],
-        'APP_DIRS': True,
+        'APP_DIRS': True,  # Должно быть True, если не используем loaders
         'OPTIONS': {
             'context_processors': [
                 'django.template.context_processors.debug',
@@ -52,6 +55,28 @@ TEMPLATES = [
         },
     },
 ]
+
+# Альтернативный вариант с кэшированием (раскомментируйте если нужно)
+# TEMPLATES = [
+#     {
+#         'BACKEND': 'django.template.backends.django.DjangoTemplates',
+#         'DIRS': [BASE_DIR / 'templates'],
+#         'OPTIONS': {
+#             'loaders': [
+#                 ('django.template.loaders.cached.Loader', [
+#                     'django.template.loaders.filesystem.Loader',
+#                     'django.template.loaders.app_directories.Loader',
+#                 ]),
+#             ],
+#             'context_processors': [
+#                 'django.template.context_processors.debug',
+#                 'django.template.context_processors.request',
+#                 'django.contrib.auth.context_processors.auth',
+#                 'django.contrib.messages.context_processors.messages',
+#             ],
+#         },
+#     },
+# ]
 
 WSGI_APPLICATION = 'order_kpt.wsgi.application'
 
@@ -88,6 +113,7 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 STATIC_URL = 'static/'
 STATICFILES_DIRS = [BASE_DIR / 'static']
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

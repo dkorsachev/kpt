@@ -10,6 +10,12 @@ from django.conf import settings
 from .forms import CadastralNumberForm
 from .doc_generators import DocumentGenerator
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+
+
+# Создаем один генератор для всего запроса (переиспользование)
+generator = DocumentGenerator()
 
 
 def index(request):
@@ -26,14 +32,14 @@ def generate_documents(request):
     if not form.is_valid():
         return render(request, 'kpt_app/index.html', {'form': form})
     
-    # Получаем данные о строках из формы
+    # Получаем данные
     rows_data = form.cleaned_data['rows_json']
     current_date = datetime.now()
     
     # Пути к шаблонам
     templates_dir = os.path.join(settings.BASE_DIR, 'templates_docs')
     
-    # Проверяем различные варианты имен файлов
+    # Кэшируем пути
     sluzhebka_template = os.path.join(templates_dir, 'sluzhebka_template.docx')
     if not os.path.exists(sluzhebka_template):
         sluzhebka_template = os.path.join(templates_dir, 'sluzhebka_template.docx.docx')
@@ -46,23 +52,18 @@ def generate_documents(request):
     if not os.path.exists(zu_template):
         zu_template = os.path.join(templates_dir, 'zu_template.docx.docx')
     
-    # Проверяем существование файлов шаблонов
     if not os.path.exists(sluzhebka_template):
         return render(request, 'kpt_app/index.html', {
             'form': form,
             'error': f'Файл шаблона не найден: sluzhebka_template.docx'
         })
     
-    # Создаем генератор документов
-    generator = DocumentGenerator()
-    
-    # Создаем временную директорию для файлов
+    # Создаем временную директорию
     with tempfile.TemporaryDirectory() as temp_dir:
-        # Создаем ZIP-архив в памяти
         zip_buffer = BytesIO()
         
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            # Генерируем служебную записку (DOCX и PDF)
+            # Генерируем служебную записку
             try:
                 sluzhebka_doc = generator.generate_sluzhebka(
                     sluzhebka_template,
@@ -71,11 +72,9 @@ def generate_documents(request):
                 )
                 sluzhebka_docx = os.path.join(temp_dir, "Запрос из ЕГРН.docx")
                 sluzhebka_doc.save(sluzhebka_docx)
-                
-                # Добавляем в архив DOCX
                 zip_file.write(sluzhebka_docx, "Запрос из ЕГРН.docx")
                 
-                # Конвертируем в PDF и добавляем в архив
+                # Конвертируем в PDF в отдельном потоке
                 sluzhebka_pdf = os.path.join(temp_dir, "Запрос из ЕГРН.pdf")
                 if generator.convert_to_pdf(sluzhebka_docx, sluzhebka_pdf):
                     zip_file.write(sluzhebka_pdf, "Запрос из ЕГРН.pdf")
@@ -85,55 +84,47 @@ def generate_documents(request):
                     'error': f'Ошибка при генерации служебной записки: {str(e)}'
                 })
             
-            # Генерируем отдельные файлы для каждой строки (только DOCX)
-            for i, row in enumerate(rows_data):
+            # Параллельная генерация файлов для каждой строки
+            def generate_row_file(row):
                 try:
                     cad_num = row['cadastral_number']
                     contract_number = row['contract_number']
                     contract_date = datetime.strptime(row['contract_date'], '%Y-%m-%d')
                     
-                    # Определяем тип кадастрового номера
                     if re.match(r'^\d{2}:\d{2}:\d{7}$', cad_num):
-                        # Кадастровый квартал
-                        if not os.path.exists(kpt_template):
-                            continue
+                        template = kpt_template
                         doc = generator.generate_kpt(
-                            kpt_template,
-                            cad_num,
-                            contract_number,
-                            contract_date,
-                            current_date
+                            template, cad_num, contract_number, contract_date, current_date
                         )
-                        # Формируем имя файла
                         num_parts = cad_num.replace(':', '_')
                         filename = f"Запрос_на_кад_квартал_{num_parts}.docx"
                     else:
-                        # Земельный участок
-                        if not os.path.exists(zu_template):
-                            continue
+                        template = zu_template
                         doc = generator.generate_zu(
-                            zu_template,
-                            cad_num,
-                            contract_number,
-                            contract_date,
-                            current_date
+                            template, cad_num, contract_number, contract_date, current_date
                         )
-                        # Формируем имя файла
                         num_parts = cad_num.replace(':', '_')
                         filename = f"Запрос_выписки_ЗУ_{num_parts}.docx"
                     
-                    # Сохраняем DOCX
-                    docx_path = os.path.join(temp_dir, filename)
-                    doc.save(docx_path)
+                    if not os.path.exists(template):
+                        return None
                     
-                    # Добавляем только DOCX в архив (без PDF)
-                    zip_file.write(docx_path, filename)
-                        
+                    filepath = os.path.join(temp_dir, filename)
+                    doc.save(filepath)
+                    return (filename, filepath)
                 except Exception as e:
-                    # Если ошибка с конкретным номером, пропускаем его
-                    continue
+                    return None
+            
+            # Запускаем параллельную генерацию
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = [executor.submit(generate_row_file, row) for row in rows_data]
+                
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result:
+                        filename, filepath = result
+                        zip_file.write(filepath, filename)
         
-        # Возвращаем ZIP-архив
         zip_buffer.seek(0)
         response = FileResponse(
             zip_buffer, 

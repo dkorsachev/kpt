@@ -2,8 +2,8 @@ import re
 import os
 from datetime import datetime
 from docx import Document
-from docx.shared import Pt, Cm
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+from docx.shared import Pt, Cm, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
@@ -38,66 +38,88 @@ class DocumentGenerator:
             return date_obj
         return date_obj.strftime('%d.%m.%Y')
     
-    def replace_in_paragraph_preserve_format(self, paragraph, replacements):
-        """Замена текста в параграфе с сохранением оригинального форматирования"""
-        full_text = paragraph.text
-        new_text = full_text
-        
-        for key, value in replacements.items():
-            if key in new_text:
-                new_text = new_text.replace(key, value)
-        
-        if full_text != new_text and new_text.strip():
-            # Сохраняем форматирование первого run
-            font_name = 'Times New Roman'
-            font_size = Pt(12)
-            bold = False
-            italic = False
-            underline = False
-            
-            if paragraph.runs:
-                original_run = paragraph.runs[0]
-                if original_run.font.name:
-                    font_name = original_run.font.name
-                if original_run.font.size:
-                    font_size = original_run.font.size
-                bold = original_run.font.bold or False
-                italic = original_run.font.italic or False
-                underline = original_run.font.underline or False
-            
-            # Очищаем все runs
-            paragraph.clear()
-            
-            # Добавляем новый run с сохраненным форматированием
-            run = paragraph.add_run(new_text)
-            run.font.name = font_name
-            run.font.size = font_size
-            run.font.bold = bold
-            run.font.italic = italic
-            run.font.underline = underline
-            run._element.rPr.rFonts.set(qn('w:eastAsia'), font_name)
+    def set_run_font_size(self, run, size=12):
+        """Установка размера шрифта для run"""
+        run.font.size = Pt(size)
+        run.font.name = 'Times New Roman'
+        run._element.rPr.rFonts.set(qn('w:eastAsia'), 'Times New Roman')
     
-    def set_cell_font_size_10(self, cell, bold=False):
-        """Установка шрифта 10 для ячейки таблицы (для служебной записки)"""
-        for paragraph in cell.paragraphs:
-            text = paragraph.text
-            paragraph.clear()
-            run = paragraph.add_run(text)
-            run.font.name = 'Times New Roman'
-            run.font.size = Pt(10)
-            run.font.bold = bold
-            run._element.rPr.rFonts.set(qn('w:eastAsia'), 'Times New Roman')
+    def normalize_paragraph_font_size(self, paragraph, target_size=12, exclude_title=True):
+        """Приведение шрифта параграфа к целевому размеру без потери содержимого"""
+        # Пропускаем заголовок если нужно
+        if exclude_title and "СЛУЖЕБНАЯ ЗАПИСКА" in paragraph.text:
+            return
+        
+        # Пропускаем пустые параграфы
+        if not paragraph.text.strip() and not paragraph.runs:
+            return
+        
+        # Для каждого run в параграфе устанавливаем размер шрифта
+        for run in paragraph.runs:
+            # Проверяем, не является ли run изображением
+            # Изображения обычно имеют элемент drawing
+            has_drawing = False
+            for child in run._element:
+                if child.tag.endswith('drawing'):
+                    has_drawing = True
+                    break
             
-            # Компактное форматирование
-            paragraph.paragraph_format.line_spacing = Pt(12)
+            if not has_drawing:
+                # Это текстовый run - меняем размер шрифта
+                self.set_run_font_size(run, target_size)
+    
+    def normalize_table_font_size(self, table, target_size=12):
+        """Приведение шрифта таблицы к целевому размеру"""
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    for run in paragraph.runs:
+                        self.set_run_font_size(run, target_size)
+    
+    def replace_text_in_paragraph(self, paragraph, old_text, new_text):
+        """Замена текста в параграфе с сохранением форматирования"""
+        if old_text not in paragraph.text:
+            return False
+        
+        # Сохраняем все runs
+        for run in paragraph.runs:
+            if old_text in run.text:
+                run.text = run.text.replace(old_text, new_text)
+                return True
+        
+        return False
+    
+    def replace_in_document(self, doc, replacements):
+        """Замена всех маркеров в документе"""
+        for key, value in replacements.items():
+            # Замена в параграфах
+            for paragraph in doc.paragraphs:
+                self.replace_text_in_paragraph(paragraph, key, value)
+            
+            # Замена в таблицах
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for paragraph in cell.paragraphs:
+                            self.replace_text_in_paragraph(paragraph, key, value)
+    
+    def set_cell_font_size_12(self, cell, bold=False):
+        """Установка шрифта 12 для ячейки таблицы"""
+        for paragraph in cell.paragraphs:
+            for run in paragraph.runs:
+                run.font.name = 'Times New Roman'
+                run.font.size = Pt(12)
+                run.font.bold = bold
+                run._element.rPr.rFonts.set(qn('w:eastAsia'), 'Times New Roman')
+            
+            paragraph.paragraph_format.line_spacing = Pt(14)
             paragraph.paragraph_format.space_before = Pt(0)
             paragraph.paragraph_format.space_after = Pt(0)
     
     def create_table_at_marker_sluzhebka(self, doc, marker_paragraph, rows_data):
-        """Создание таблицы для служебной записки (шрифт 10)"""
+        """Создание таблицы для служебной записки (шрифт 12)"""
         parent = marker_paragraph._element.getparent()
         
-        # Создаем таблицу
         table = doc.add_table(rows=1 + len(rows_data), cols=4)
         table.style = 'Table Grid'
         table.autofit = False
@@ -110,35 +132,30 @@ class DocumentGenerator:
             jc.set(qn('w:val'), 'center')
             tblPr.append(jc)
         
-        # Ширина колонок
         if len(table.columns) >= 4:
             table.columns[0].width = Cm(1.2)
             table.columns[1].width = Cm(3.5)
             table.columns[2].width = Cm(4.5)
             table.columns[3].width = Cm(5.5)
         
-        # Заголовки таблицы (шрифт 10, жирный)
+        # Заголовки таблицы (шрифт 12, жирный)
         headers = ['№ п/п', 'Тип документа', 'Кадастровый номер', 'Основание']
         for i, header in enumerate(headers):
             cell = table.cell(0, i)
             cell.text = header
-            self.set_cell_font_size_10(cell, bold=True)
+            self.set_cell_font_size_12(cell, bold=True)
             for paragraph in cell.paragraphs:
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
-        # Данные таблицы (шрифт 10)
+        # Данные таблицы (шрифт 12)
         for i, row in enumerate(rows_data, 1):
             cad_num = row['cadastral_number']
             
-            # Определение типа документа по формату кадастрового номера
             if re.match(r'^\d{2}:\d{2}:\d{7}$', cad_num):
-                # Формат 95:ХХ:ХХХХХХХ - кадастровый квартал
                 doc_type = "Кадастровый квартал"
             elif re.match(r'^\d{2}:\d{2}:\d{7}:\d{1,5}$', cad_num):
-                # Формат 95:ХХ:ХХХХХХХ:ХХХХ - земельный участок
                 doc_type = "Выписка ЕГРН"
             else:
-                # На всякий случай
                 doc_type = "Объект недвижимости"
             
             contract_date = datetime.strptime(row['contract_date'], '%Y-%m-%d')
@@ -152,7 +169,7 @@ class DocumentGenerator:
             row_cells[3].text = foundation
             
             for cell in row_cells:
-                self.set_cell_font_size_10(cell)
+                self.set_cell_font_size_12(cell)
                 for paragraph in cell.paragraphs:
                     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
@@ -164,33 +181,37 @@ class DocumentGenerator:
     
     def generate_sluzhebka(self, template_path, rows_data, current_date):
         """Генерация служебной записки"""
+        # Загружаем шаблон
         doc = Document(template_path)
         
-        # Общие замены (даты) - с сохранением оригинального форматирования
+        # Заменяем маркеры дат
         replacements = {
             self.markers['current_date']: self.format_date_for_doc(current_date),
             self.markers['current_date_short']: self.format_date_short(current_date),
         }
+        self.replace_in_document(doc, replacements)
         
-        # Сначала заменяем все маркеры дат с сохранением форматирования
-        for paragraph in doc.paragraphs:
-            if self.markers['table_place'] not in paragraph.text and '##TABLE_ROW##' not in paragraph.text:
-                self.replace_in_paragraph_preserve_format(paragraph, replacements)
-        
-        # Ищем и обрабатываем маркер таблицы
+        # Ищем маркер таблицы
         marker_paragraphs = []
         for paragraph in doc.paragraphs:
             if self.markers['table_place'] in paragraph.text or '##TABLE_ROW##' in paragraph.text:
                 marker_paragraphs.append(paragraph)
         
-        # Создаем таблицы на месте каждого маркера
+        # Создаем таблицы на месте маркеров
         for marker_paragraph in marker_paragraphs:
             self.create_table_at_marker_sluzhebka(doc, marker_paragraph, rows_data)
+        
+        # Приводим размер шрифта к 12 для всего текста (кроме заголовка)
+        for paragraph in doc.paragraphs:
+            self.normalize_paragraph_font_size(paragraph, target_size=12, exclude_title=True)
+        
+        for table in doc.tables:
+            self.normalize_table_font_size(table, target_size=12)
         
         return doc
     
     def generate_kpt(self, template_path, cadastral_number, contract_number, contract_date, current_date):
-        """Генерация запроса на кадастровый квартал с сохранением форматирования шаблона"""
+        """Генерация запроса на кадастровый квартал"""
         doc = Document(template_path)
         
         replacements = {
@@ -202,20 +223,12 @@ class DocumentGenerator:
             self.markers['current_date_short']: self.format_date_short(current_date),
         }
         
-        # Заменяем с сохранением оригинального форматирования
-        for paragraph in doc.paragraphs:
-            self.replace_in_paragraph_preserve_format(paragraph, replacements)
-        
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    for paragraph in cell.paragraphs:
-                        self.replace_in_paragraph_preserve_format(paragraph, replacements)
+        self.replace_in_document(doc, replacements)
         
         return doc
     
     def generate_zu(self, template_path, cadastral_number, contract_number, contract_date, current_date):
-        """Генерация запроса на земельный участок с сохранением форматирования шаблона"""
+        """Генерация запроса на земельный участок"""
         doc = Document(template_path)
         
         replacements = {
@@ -227,37 +240,26 @@ class DocumentGenerator:
             self.markers['current_date_short']: self.format_date_short(current_date),
         }
         
-        # Заменяем с сохранением оригинального форматирования
-        for paragraph in doc.paragraphs:
-            self.replace_in_paragraph_preserve_format(paragraph, replacements)
-        
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    for paragraph in cell.paragraphs:
-                        self.replace_in_paragraph_preserve_format(paragraph, replacements)
+        self.replace_in_document(doc, replacements)
         
         return doc
     
     def convert_to_pdf(self, docx_path, pdf_path):
         """Конвертация DOCX в PDF"""
         try:
-            # Пробуем использовать docx2pdf
             from docx2pdf import convert
             convert(docx_path, pdf_path)
             return True
         except ImportError:
             try:
-                # Альтернативный способ для Windows
                 import win32com.client
                 word = win32com.client.Dispatch("Word.Application")
                 word.Visible = False
                 
                 doc = word.Documents.Open(docx_path)
-                doc.SaveAs(pdf_path, FileFormat=17)  # 17 = wdFormatPDF
+                doc.SaveAs(pdf_path, FileFormat=17)
                 doc.Close()
                 word.Quit()
                 return True
             except:
-                # Если ничего не работает, возвращаем False
                 return False
